@@ -6,6 +6,7 @@ import math
 from C_code import fill_hole
 import os
 from scipy import signal
+from get_midline_bone import get_midline_bone
 
 nband = 0.01
 
@@ -16,6 +17,24 @@ def CLAHE(img):
     # 限制对比度的自适应阈值均衡化
     dst = clahe.apply(img)
     return dst
+
+
+# 图像尺寸归一化
+def normal_shape(img):
+    for i in range(img.shape[0] - 1, -1, -1):
+        if np.sum(img[i, :]) > 0:
+            break
+    img = img[:i + 1, :]
+    for i in range(img.shape[1]):
+        if np.sum(img[:, i]) > 0:
+            break
+    img = img[:, i:]
+    for i in range(img.shape[1] - 1, -1, -1):
+        if np.sum(img[:, i]) > 0:
+            break
+    img = img[:, :i + 1]
+    img = cv2.resize(img, (600, 800))
+    return img
 
 
 def get_shape(img):
@@ -123,14 +142,12 @@ def get_finger(hands_shape, coordinate, max_index, min_index):
             if len(max_index) > 4:
                 max_index.pop(0)
                 peak_index.pop(0)
-            tag = -1  # 标记左手
         else:
             min_index.pop(-1)
             valley_index.pop(-1)
             if len(max_index) > 4:
                 max_index.pop(-1)
                 peak_index.pop(-1)
-            tag = 1  # 标记右手
         # --------------------------------------------
 
     valley_fit = [0]  # 填充最两侧谷值
@@ -189,12 +206,12 @@ def get_finger(hands_shape, coordinate, max_index, min_index):
         peaks.append(np.array(coordinate[max_index[i], :] - [min_x, min_y]))
         for i in range(len(fingers)):
             np.savez('finger%d.npz' % i, fingers[i], peaks[i])
-    return fingers, peaks, tag
+    return fingers, peaks
 
 
 def extract_feature(img, mid_line, b0):
     feature = []
-    feature_point = 20
+    feature_point = 30
     record_p = []
     index_re = []
     if b0 == 0:
@@ -219,11 +236,34 @@ def extract_feature(img, mid_line, b0):
             y = mid_line[i]
             b = x - y * k
             fL = [int(k * i + b) for i in range(img.shape[1])]
-            if min(fL) >= 0:
+            fH = [math.ceil(k * i + b) for i in range(img.shape[1])]
+            start = 0
+            end = 0
+            for j in range(int(mid_line[i]), -1, -1):
+                if 0 < fL[j] < img.shape[0]:
+                    if img[fL[j], j] == 255:
+                        start = 1
+                        break
+                    elif img[fH[j], j] == 255:
+                        start = 1
+                        break
+            for j in range(int(mid_line[i]), len(fL)):
+                if 0 < fL[j] < img.shape[0]:
+                    if img[fL[j], j] == 255:
+                        end = 1
+                        break
+                    elif img[fH[j], j] == 255:
+                        end = 1
+                        break
+            if start == 1 and end == 1:
                 break
-        fir = i
-        index = np.linspace(fir, len(mid_line), feature_point + 2)
-        for i in index[1:feature_point + 1]:
+        first = i  # 记录求特征值的起点
+        for i in range(len(mid_line)):
+            if img[i, int(mid_line[i])] == 255 or img[i, int(mid_line[i]) + 1] == 255:
+                break
+        last = i  # 记录求特征值终点
+        index = np.linspace(first + 1, last, feature_point + 2)
+        for i in index[:feature_point]:
             i = int(round(i))
             x = i
             y = mid_line[i]
@@ -255,9 +295,10 @@ def extract_feature(img, mid_line, b0):
 def get_feature(img):
     try:
         img = get_shape(img)
+        img = normal_shape(img)
         hand_shape, coordinate = get_dist(img)
         max_index, min_index = get_peak(coordinate[:, 0])
-        fingers, peaks, tag = get_finger(hand_shape, coordinate, max_index, min_index)
+        fingers, peaks = get_finger(hand_shape, coordinate, max_index, min_index)
     except Exception as e:
         print('get error,', e)
         return 0, 0
@@ -268,33 +309,38 @@ def get_feature(img):
         img = list2img(finger)
 
         try:
-            b0, b1, pre, mid_point = get_midline(finger, peak)
+            # b0, b1, pre, mid_point = get_midline(finger, peak)
+            b0, b1, pre, mid_point = get_midline_bone(finger)
         except Exception as e:
             print('get midline error,', e)
             return 0, 0
 
         new_pre = [b0 * i + b1 for i in range(img.shape[0])]
         img_2 = add_midline(img.copy(), np.array([[i for i in range(img.shape[0])], new_pre]))
-
         try:
             feature, record_p, index_pre = extract_feature(img, new_pre, b0)
         except Exception as e:
             print('extract feature error,', e)
-            return 0, 0
+            return 0
 
-        for i in range(len(record_p)):
+        '''for i in range(len(record_p)):
             print(feature[i])
             f = record_p[i]
             index = index_pre[i]
-            #img_2 = add_midline(img_2.copy(), np.array([f, [i for i in range(index[0], index[1])]]))
-        #cv2.imshow('1', img_2)
-        #cv2.waitKey(500)
+            img_2 = add_midline(img_2.copy(), np.array([f, [i for i in range(index[0], index[1])]]))
+        plt.figure(0)
+        plt.imshow(img_2)
+        plt.show()'''
         features.append(feature)
-    return features, tag
+    if len(features) == 4:
+        return features
+    else:
+        return 0
 
 
 def process_features():
     path = r'E:\Folder\hands_shape\palm'
+    #path = r'E:\Folder\hands_shape\after'
     floders = os.listdir(path)
     for floder in floders:
         files = os.listdir(os.path.join(path, floder))
@@ -302,9 +348,8 @@ def process_features():
             os.mkdir(os.path.join('./feature_both', floder))
         for file in files:
             img = cv2.imread(os.path.join(path, floder, file))
-            img = cv2.resize(img, (800, 600))
             try:
-                features, tag = get_feature(img)
+                features = get_feature(img)
             except Exception as e:
                 print('get feature error,', e)
                 os.remove(os.path.join(path, floder, file))
@@ -314,18 +359,17 @@ def process_features():
                 os.remove(os.path.join(path, floder, file))
                 print('delete ', floder, '--', file)
                 continue
-            np.savez(os.path.join('feature_dorsal', floder, file.split('.')[0].split('_')[1]), np.array(features),
-                     np.array(tag))
+            if len(features) == 4:
+                np.savez(os.path.join('feature_both', floder, file.split('.')[0].split('_')[1]), np.array(features))
 
 
 def test_one():
     path = 'data'
     file = '6514.jpg'
     img = cv2.imread(os.path.join(path, file))
-    img = cv2.resize(img, (800, 600))
-    features, tag = get_feature(img)
-    np.savez(os.path.join('feature', file.split('.')[0]), np.array(features), np.array(tag))
+    features = get_feature(img)
+    np.savez(os.path.join('feature', file.split('.')[0]), np.array(features))
 
 
-# process_features()
+#process_features()
 # test_one()

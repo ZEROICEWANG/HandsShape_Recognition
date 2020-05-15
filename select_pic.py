@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 import os
 import shutil
-from get_feature import get_shape, get_dist
+#from get_feature import get_shape, get_dist
 import cv2
 import matplotlib.pyplot as plt
 
